@@ -74,6 +74,13 @@ contract BinCounterHook is BinBaseHook {
         returns (bytes4)
     {
         afterSwapCount[key.toId()]++;
+
+        // Check for arbitrage opportunities and execute if profitable
+        ArbitrageOpportunity memory opportunity = checkArbitrageOpportunity(key, key, 1000); // Example values
+        if (opportunity.profit > 0) {
+            executeArbitrage(key, IBinPoolManager.SwapParams({zeroForOne: true, amountSpecified: 1000}), opportunity);
+        }
+
         return this.afterSwap.selector;
     }
 }

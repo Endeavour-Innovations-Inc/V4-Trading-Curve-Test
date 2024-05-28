@@ -44,6 +44,12 @@ abstract contract CLBaseHook is ICLHooks {
         bool noOp;
     }
 
+    struct ArbitrageOpportunity {
+        address poolA;
+        address poolB;
+        uint256 profit;
+    }
+
     /// @notice The address of the pool manager
     ICLPoolManager public immutable poolManager;
 
@@ -80,7 +86,7 @@ abstract contract CLBaseHook is ICLHooks {
     }
 
     /// @dev Helper function when the hook needs to get a lock from the vault. See
-    ///      https://github.com/pancakeswap/pancake-v4-hooks oh hooks which perform vault.lock()
+    ///      https://github.com/pancakeswap/pancake-v4-hooks on hooks which perform vault.lock()
     function lockAcquired(bytes calldata data) external virtual vaultOnly returns (bytes memory) {
         (bool success, bytes memory returnData) = address(this).call(data);
         if (success) return returnData;
@@ -188,5 +194,52 @@ abstract contract CLBaseHook is ICLHooks {
                 | (permissions.afterDonate ? 1 << HOOKS_AFTER_DONATE_OFFSET : 0)
                 | (permissions.noOp ? 1 << HOOKS_NO_OP_OFFSET : 0)
         );
+    }
+
+    function checkArbitrageOpportunity(
+        PoolKey memory keyA,
+        PoolKey memory keyB,
+        uint256 amountIn
+    ) public view returns (ArbitrageOpportunity memory) {
+        // Get prices from both pools
+        (uint256 priceA,) = getPrice(keyA, amountIn);
+        (uint256 priceB,) = getPrice(keyB, amountIn);
+
+        // Determine profit if any
+        uint256 profit = 0;
+        if (priceA > priceB) {
+            profit = priceA - priceB;
+        } else if (priceB > priceA) {
+            profit = priceB - priceA;
+        }
+
+        return ArbitrageOpportunity({
+            poolA: address(poolManager),
+            poolB: address(poolManager),
+            profit: profit
+        });
+    }
+
+    function getPrice(PoolKey memory key, uint256 amountIn) public view returns (uint256 amountOut, uint256 price) {
+        // Get the price of the token in the pool
+        (uint160 sqrtPriceX96, , ,) = poolManager.getSlot0(key.toId());
+        price = uint256(sqrtPriceX96) * uint256(sqrtPriceX96) / (2**96);
+        amountOut = amountIn * price / (10**18);
+    }
+
+    function executeArbitrage(
+        PoolKey memory key,
+        ICLPoolManager.SwapParams memory swapParams,
+        ArbitrageOpportunity memory opportunity
+    ) internal {
+        // Execute arbitrage trade
+        // Assume we swap from poolA to poolB
+        // Swap on pool A
+        (uint256 amountOutA, ) = poolManager.swap(key, swapParams, "");
+
+        // Swap on pool B
+        swapParams.zeroForOne = !swapParams.zeroForOne;
+        swapParams.amountSpecified = int256(amountOutA);
+        poolManager.swap(key, swapParams, "");
     }
 }

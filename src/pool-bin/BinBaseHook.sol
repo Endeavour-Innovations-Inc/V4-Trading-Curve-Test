@@ -21,8 +21,11 @@ import {IVault} from "@pancakeswap/v4-core/src/interfaces/IVault.sol";
 import {IBinHooks} from "@pancakeswap/v4-core/src/pool-bin/interfaces/IBinHooks.sol";
 import {IBinPoolManager} from "@pancakeswap/v4-core/src/pool-bin/interfaces/IBinPoolManager.sol";
 import {BinPoolManager} from "@pancakeswap/v4-core/src/pool-bin/BinPoolManager.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 abstract contract BinBaseHook is IBinHooks {
+    using SafeERC20 for IERC20;
+
     error NotPoolManager();
     error NotVault();
     error NotSelf();
@@ -42,6 +45,12 @@ abstract contract BinBaseHook is IBinHooks {
         bool beforeDonate;
         bool afterDonate;
         bool noOp;
+    }
+
+    struct ArbitrageOpportunity {
+        address poolA;
+        address poolB;
+        uint256 profit;
     }
 
     /// @notice The address of the pool manager
@@ -174,5 +183,52 @@ abstract contract BinBaseHook is IBinHooks {
                 | (permissions.afterDonate ? 1 << HOOKS_AFTER_DONATE_OFFSET : 0)
                 | (permissions.noOp ? 1 << HOOKS_NO_OP_OFFSET : 0)
         );
+    }
+
+    function checkArbitrageOpportunity(
+        PoolKey memory keyA,
+        PoolKey memory keyB,
+        uint256 amountIn
+    ) public view returns (ArbitrageOpportunity memory) {
+        // Get prices from both pools
+        (uint256 priceA,) = getPrice(keyA, amountIn);
+        (uint256 priceB,) = getPrice(keyB, amountIn);
+
+        // Determine profit if any
+        uint256 profit = 0;
+        if (priceA > priceB) {
+            profit = priceA - priceB;
+        } else if (priceB > priceA) {
+            profit = priceB - priceA;
+        }
+
+        return ArbitrageOpportunity({
+            poolA: address(poolManager),
+            poolB: address(poolManager),
+            profit: profit
+        });
+    }
+
+    function getPrice(PoolKey memory key, uint256 amountIn) public view returns (uint256 amountOut, uint256 price) {
+        // Get the price of the token in the pool
+        (uint160 sqrtPriceX96, , ,) = poolManager.getSlot0(key.toId());
+        price = uint256(sqrtPriceX96) * uint256(sqrtPriceX96) / (2**96);
+        amountOut = amountIn * price / (10**18);
+    }
+
+    function executeArbitrage(
+        PoolKey memory key,
+        IBinPoolManager.SwapParams memory swapParams,
+        ArbitrageOpportunity memory opportunity
+    ) internal {
+        // Execute arbitrage trade
+        // Assume we swap from poolA to poolB
+        // Swap on pool A
+        (uint256 amountOutA, ) = poolManager.swap(key, swapParams, "");
+
+        // Swap on pool B
+        swapParams.zeroForOne = !swapParams.zeroForOne;
+        swapParams.amountSpecified = int256(amountOutA);
+        poolManager.swap(key, swapParams, "");
     }
 }
